@@ -1,0 +1,10 @@
+/target/
+# Runtime: the bot's keys and its local XMTP database. Never commit.
+/secrets/
+/xmtp_data/
+*.db3
+*.db3-shm
+*.db3-wal
+*.sqlcipher_salt
+# Decrypted files written by the test run (may be private)
+/received/

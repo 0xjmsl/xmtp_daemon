@@ -1,0 +1,78 @@
+[package]
+name = "xmtp_daemon"
+version = "0.1.0"
+edition = "2021"
+description = "A standalone XMTP client in Rust: keeps one inbox online and lets any program send and receive messages, files and galleries over local HTTP. Built on libxmtp. Not affiliated with XMTP."
+license = "MIT"
+repository = "https://github.com/0xjmsl/xmtp_daemon"
+readme = "README.md"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "xmtp_daemon"
+path = "src/main.rs"
+
+[dependencies]
+# Core XMTP crates (pinned to v1.9.0)
+xmtp_mls = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
+xmtp_id = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
+xmtp_db = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
+xmtp_api_d14n = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
+xmtp_api_grpc = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
+xmtp_api = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
+xmtp_content_types = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
+xmtp_proto = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
+
+# HTTP client (for remote attachment download)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Async runtime
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "signal", "net", "time"] }
+
+# Error handling
+anyhow = "1"
+
+# Crypto (key generation + Ethereum address derivation)
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha3 = "0.10"
+rand = "0.8"
+hex = "0.4"
+
+# Protobuf decode of raw EncodedContent (our codecs read it directly)
+prost = "0.14"
+
+# Envelope to the bot (JSON, base64 file bodies)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+# Local HTTP API (bot -> daemon)
+axum = "0.8"
+
+# Streams
+futures = "0.3"
+
+# Logging
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+serde_json = "1"
+prost = "0.14"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+xmtp_common = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
+
+[patch.crates-io]
+diesel = { git = "https://github.com/ephemerahq/diesel", branch = "coda/copy-to-sqlite" }
+diesel_migrations = { git = "https://github.com/ephemerahq/diesel", branch = "coda/copy-to-sqlite" }
+
+# Pin hpke-rs to v0.4.0 (openmls_libcrux_crypto requires ^0.4.0, latest on default branch is 0.5.x).
+# Vendored unmodified in deps/hpke-rs (MPL-2.0, see THIRD_PARTY_NOTICES.md).
+[patch."https://github.com/cryspen/hpke-rs"]
+hpke-rs = { path = "deps/hpke-rs" }
+hpke-rs-crypto = { path = "deps/hpke-rs/traits" }
+hpke-rs-libcrux = { path = "deps/hpke-rs/libcrux_provider" }
+
