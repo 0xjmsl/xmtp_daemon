@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use prost::Message as _;
 use xmtp_proto::xmtp::message_contents::EncodedContent;
 use xmtp_daemon::api::{client, conversations, messaging};
-use xmtp_daemon::{bridge, codec, envelope};
+use xmtp_daemon::{bridge, codec, envelope, watch};
 
 /// One line describing a raw message: content type, parameters (our caption
 /// rides in `description`), fallback and payload size. Step-2 groundwork.
@@ -82,8 +82,28 @@ impl Seen {
     }
 }
 
+/// Send-only mode (watch mode with no webhook): a received message is counted
+/// for the watch loop and never opened. It is not decoded and not logged.
+struct SendOnly {
+    incoming: tokio::sync::mpsc::UnboundedSender<String>,
+    cursor_path: PathBuf,
+    cursor_ms: i64,
+}
+
+impl SendOnly {
+    fn note(&mut self, m: &messaging::MessageInfo) {
+        let _ = self.incoming.send(m.sender_inbox_id.clone());
+        // Move the cursor, so a restart does not count this message again.
+        if m.sent_at_ms > self.cursor_ms {
+            self.cursor_ms = m.sent_at_ms;
+            bridge::save_cursor(&self.cursor_path, self.cursor_ms);
+        }
+    }
+}
+
 /// Decode one message with our codecs and log what the bot would receive.
 /// Test mode: decrypted files are written to `received/` for inspection.
+/// In send-only mode none of that happens: the message is only counted.
 async fn handle(
     prefix: &str,
     m: &messaging::MessageInfo,
@@ -92,6 +112,7 @@ async fn handle(
     convos: &mut envelope::Conversations,
     fwd: &bridge::Forwarder,
     floor_ms: i64,
+    send_only: Option<&mut SendOnly>,
 ) {
     if !seen.first(&m.id) {
         tracing::debug!(id = %m.id, "duplicate, skipped");
@@ -106,6 +127,10 @@ async fn handle(
     }
     if m.sender_inbox_id == my_inbox {
         return; // our own sends echo back on the stream
+    }
+    if let Some(send_only) = send_only {
+        send_only.note(m);
+        return;
     }
     let content = match codec::decode(&m.encoded_content_bytes).await {
         Ok(c) => c,
@@ -188,9 +213,22 @@ fn load_or_create_key(path: &PathBuf, what: &str) -> Result<Vec<u8>> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, hex::encode(&key)).with_context(|| format!("write {what}"))?;
+    write_private(path, &hex::encode(&key)).with_context(|| format!("write {what}"))?;
     tracing::warn!("created a new {what} at {}", path.display());
     Ok(key)
+}
+
+/// Create `path` with `text` in it, readable by its owner only (mode 600 on unix).
+fn write_private(path: &PathBuf, text: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(text.as_bytes())
 }
 
 /// Sync everything (all consent states, so a stranger's first DM counts),
@@ -202,6 +240,7 @@ async fn catch_up(
     convos: &mut envelope::Conversations,
     fwd: &bridge::Forwarder,
     floor_ms: i64,
+    send_only: &mut Option<SendOnly>,
 ) -> Result<()> {
     let synced = conversations::sync_all(None).await?;
     let list = conversations::list_conversations(None).await?;
@@ -214,7 +253,7 @@ async fn catch_up(
     }
     all.sort_by_key(|m| m.sent_at_ms);
     for m in &all {
-        handle("backlog", m, seen, my_inbox, convos, fwd, floor_ms).await;
+        handle("backlog", m, seen, my_inbox, convos, fwd, floor_ms, send_only.as_mut()).await;
     }
     Ok(())
 }
@@ -290,16 +329,25 @@ async fn run() -> Result<()> {
             now
         }
     };
-    let fwd = bridge::Forwarder::start(
-        // XMTP_WEBHOOK_URL; GPETTE_URL is still read as an older alias.
-        std::env::var("XMTP_WEBHOOK_URL")
-            .or_else(|_| std::env::var("GPETTE_URL"))
-            .ok()
-            .filter(|u| !u.is_empty()),
-        cursor_path,
-    );
+    // XMTP_WEBHOOK_URL; GPETTE_URL is still read as an older alias.
+    let webhook = std::env::var("XMTP_WEBHOOK_URL")
+        .or_else(|_| std::env::var("GPETTE_URL"))
+        .ok()
+        .filter(|u| !u.is_empty());
+    let has_webhook = webhook.is_some();
+    let fwd = bridge::Forwarder::start(webhook, cursor_path.clone());
     let api_addr = std::env::var("XMTP_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1:3100".into());
     let api = tokio::spawn(bridge::serve(api_addr, address.clone(), inbox_id.clone(), fwd.clone()));
+    // Watch mode (off unless XMTP_WATCH_CMD and XMTP_WATCH_TO are set).
+    let watcher = watch::start_from_env(env_path("XMTP_DB_DIR", "./xmtp_data"));
+    // Watch mode with no webhook is send-only: nothing here reads a message.
+    let mut send_only = match &watcher {
+        Some(w) if !has_webhook => {
+            tracing::info!("send-only: received messages are counted, never decoded or logged");
+            Some(SendOnly { incoming: w.incoming.clone(), cursor_path, cursor_ms: floor_ms })
+        }
+        _ => None,
+    };
     // Supervisor: catch up, then stream. When the stream ends (network drop,
     // libxmtp error), re-read the gap and resubscribe with backoff instead of
     // exiting. `seen` de-dups the overlap between the re-read and what the
@@ -311,8 +359,10 @@ async fn run() -> Result<()> {
         let caught_up_at = chrono_now_ms();
         // Box::pin: libxmtp's futures are huge; nested inline in main's future
         // they overflowed the 1 MB Windows main-thread stack .
-        if let Err(e) =
-            Box::pin(catch_up(since_ms, &mut seen, &inbox_id, &mut convos, &fwd, floor_ms)).await
+        if let Err(e) = Box::pin(catch_up(
+            since_ms, &mut seen, &inbox_id, &mut convos, &fwd, floor_ms, &mut send_only,
+        ))
+        .await
         {
             tracing::warn!("catch-up failed: {e:#}; retrying in {backoff:?}");
             if wait_or_quit(backoff).await {
@@ -333,7 +383,11 @@ async fn run() -> Result<()> {
                         backoff = Duration::from_secs(5);
                         fwd.last_stream_event_ms
                             .store(chrono_now_ms(), std::sync::atomic::Ordering::Relaxed);
-                        handle("incoming", &m, &mut seen, &inbox_id, &mut convos, &fwd, floor_ms).await;
+                        handle(
+                            "incoming", &m, &mut seen, &inbox_id, &mut convos, &fwd, floor_ms,
+                            send_only.as_mut(),
+                        )
+                        .await;
                     }
                     None => break,
                 },
@@ -359,6 +413,9 @@ async fn run() -> Result<()> {
         backoff = (backoff * 2).min(Duration::from_secs(60));
     }
     api.abort();
+    if let Some(w) = watcher {
+        w.task.abort();
+    }
     let _ = client::close_client().await;
     Ok(())
 }

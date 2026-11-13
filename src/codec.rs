@@ -34,6 +34,13 @@ pub enum Content {
         description: Option<String>,
     },
     ReadReceipt,
+    /// A button press on a menu we sent (`coinbase.com/intent`): `id` is the
+    /// menu's id, `action_id` the button's.
+    Intent {
+        id: String,
+        action_id: String,
+        metadata: Option<serde_json::Value>,
+    },
     /// Anything we don't handle yet (reply, reaction, …): type + fallback.
     Unsupported {
         type_id: String,
@@ -73,10 +80,20 @@ fn encoded(
     parameters: HashMap<String, String>,
     fallback: Option<String>,
 ) -> Vec<u8> {
+    encoded_as("xmtp.org", type_id, content, parameters, fallback)
+}
+
+fn encoded_as(
+    authority: &str,
+    type_id: &str,
+    content: Vec<u8>,
+    parameters: HashMap<String, String>,
+    fallback: Option<String>,
+) -> Vec<u8> {
     use xmtp_proto::xmtp::message_contents::ContentTypeId;
     EncodedContent {
         r#type: Some(ContentTypeId {
-            authority_id: "xmtp.org".into(),
+            authority_id: authority.into(),
             type_id: type_id.into(),
             version_major: 1,
             version_minor: 0,
@@ -117,6 +134,69 @@ pub fn encode_read_receipt() -> Vec<u8> {
     encoded("readReceipt", Vec::new(), HashMap::new(), None)
 }
 
+/// A menu of buttons (`coinbase.com/actions` 1.0, JSON):
+/// `{id, description, actions: [{id, label, style?, imageUrl?}]}`.
+/// Apps that render it show buttons and answer with an intent; the fallback
+/// is a numbered list, so any other app shows text the user can answer with
+/// a number.
+pub fn encode_actions(menu: &serde_json::Value) -> Result<Vec<u8>> {
+    let id = menu
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("actions without id"))?;
+    let actions = menu
+        .get("actions")
+        .and_then(serde_json::Value::as_array)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| anyhow!("actions without buttons"))?;
+    let description = menu
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let mut buttons = Vec::with_capacity(actions.len());
+    let mut fallback = format!("{description}\n");
+    for (i, a) in actions.iter().enumerate() {
+        let aid = a.get("id").and_then(serde_json::Value::as_str);
+        let label = a.get("label").and_then(serde_json::Value::as_str);
+        let (Some(aid), Some(label)) = (aid, label) else {
+            return Err(anyhow!("action {i} needs id and label"));
+        };
+        let mut b = serde_json::json!({
+            "id": aid,
+            "label": label,
+            "style": a.get("style").and_then(serde_json::Value::as_str).unwrap_or("secondary"),
+        });
+        if let Some(url) = a.get("imageUrl").and_then(serde_json::Value::as_str) {
+            b["imageUrl"] = url.into();
+        }
+        buttons.push(b);
+        fallback.push_str(&format!("[{}] {label}\n", i + 1));
+    }
+    fallback.push_str("\nReply with the number to select");
+    let body = serde_json::json!({"id": id, "description": description, "actions": buttons});
+    Ok(encoded_as(
+        "coinbase.com",
+        "actions",
+        serde_json::to_vec(&body)?,
+        HashMap::new(),
+        Some(fallback),
+    ))
+}
+
+/// A button press (`coinbase.com/intent` 1.0). Bots don't send these; it is
+/// here for tests and for a bot that drives another bot.
+pub fn encode_intent(id: &str, action_id: &str) -> Vec<u8> {
+    let body = serde_json::json!({"id": id, "actionId": action_id});
+    encoded_as(
+        "coinbase.com",
+        "intent",
+        serde_json::to_vec(&body).unwrap_or_default(),
+        HashMap::new(),
+        Some(format!("User selected action: {action_id}")),
+    )
+}
+
 /// The content type id (`authority/type`) of raw bytes, without decoding further.
 pub fn type_of(bytes: &[u8]) -> Option<String> {
     let ec = EncodedContent::decode(bytes).ok()?;
@@ -130,7 +210,28 @@ pub async fn decode(bytes: &[u8]) -> Result<Content> {
         .as_ref()
         .map(|t| t.type_id.clone())
         .unwrap_or_default();
+    let authority = ec
+        .r#type
+        .as_ref()
+        .map(|t| t.authority_id.as_str())
+        .unwrap_or_default();
     let params = &ec.parameters;
+
+    if authority == "coinbase.com" && type_id == "intent" {
+        let v: serde_json::Value =
+            serde_json::from_slice(&ec.content).context("intent is not JSON")?;
+        let field = |k: &str| {
+            v.get(k)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| anyhow!("intent missing `{k}`"))
+        };
+        return Ok(Content::Intent {
+            id: field("id")?,
+            action_id: field("actionId")?,
+            metadata: v.get("metadata").filter(|m| m.is_object()).cloned(),
+        });
+    }
 
     match type_id.as_str() {
         "text" => Ok(Content::Text(String::from_utf8_lossy(&ec.content).into_owned())),

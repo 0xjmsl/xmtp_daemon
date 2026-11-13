@@ -54,6 +54,10 @@ pub struct Incoming {
     /// All files of the message when there is more than one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<FileOut>>,
+    /// A button press: `{id, actionId, metadata?}`; `id` is the menu's id.
+    /// `content` carries the actionId too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<serde_json::Value>,
 }
 
 fn b64(data: &[u8]) -> String {
@@ -180,6 +184,7 @@ pub async fn build(
         mime_type: None,
         description: None,
         attachments: None,
+        intent: None,
     };
 
     match content {
@@ -199,6 +204,15 @@ pub async fn build(
             if items.len() > 1 {
                 env.attachments = Some(items.iter().map(file_out).collect());
             }
+        }
+        Content::Intent { id, action_id, metadata } => {
+            env.content_type = "intent";
+            env.content = action_id.clone();
+            let mut v = serde_json::json!({"id": id, "actionId": action_id});
+            if let Some(m) = metadata {
+                v["metadata"] = m.clone();
+            }
+            env.intent = Some(v);
         }
         Content::Unsupported { type_id, .. } => {
             tracing::info!(id = %m.id, %type_id, "unsupported type, not forwarded");

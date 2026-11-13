@@ -5,6 +5,8 @@
 //! - attachment:  `{conversationId, contentType: "attachment", filename, mimeType, content}`
 //!   where content is base64, a `data:` URL, or an array of byte values
 //! - read receipt `{conversationId, contentType: "readReceipt", content: ""}`
+//! - menu:        `{conversationId, contentType: "actions",
+//!                  actions: {id, description, actions: [{id, label, style?}]}}`
 //!
 //! `description` on an attachment is sent as the file's caption.
 
@@ -53,6 +55,13 @@ pub fn encode(msg: &Value) -> Result<(String, Vec<u8>, bool)> {
     match kind {
         // A receipt must not ring the other side's phone.
         "readReceipt" => Ok((topic, codec::encode_read_receipt(), false)),
+        // A menu of buttons: `actions` is `{id, description, actions:[...]}`.
+        "actions" => {
+            let menu = msg
+                .get("actions")
+                .ok_or_else(|| anyhow!("actions message without `actions`"))?;
+            Ok((topic, codec::encode_actions(menu)?, true))
+        }
         "attachment" => {
             let file = FileItem {
                 filename: msg

@@ -30,7 +30,7 @@ xmtp_proto = { git = "https://github.com/xmtp/libxmtp", tag = "v1.9.0" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Async runtime
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "signal", "net", "time"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "signal", "net", "time", "process"] }
 
 # Error handling
 anyhow = "1"

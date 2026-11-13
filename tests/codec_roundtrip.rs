@@ -101,3 +101,49 @@ fn outgoing_rejects_bad_input() {
     }))
     .is_err());
 }
+
+fn menu() -> serde_json::Value {
+    json!({"id": "menu-1", "description": "Pick one", "actions": [
+        {"id": "status", "label": "Status", "style": "primary"},
+        {"id": "model", "label": "Model"}
+    ]})
+}
+
+#[test]
+fn outgoing_actions_is_a_coinbase_menu_with_a_numbered_fallback() {
+    use prost::Message as _;
+    let (_, bytes, push) =
+        outgoing::encode(&json!({"conversationId": "ab12", "contentType": "actions", "actions": menu()}))
+            .unwrap();
+    assert!(push);
+    assert_eq!(codec::type_of(&bytes).as_deref(), Some("coinbase.com/actions"));
+    let ec = xmtp_proto::xmtp::message_contents::EncodedContent::decode(bytes.as_slice()).unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&ec.content).unwrap();
+    assert_eq!(body["id"], "menu-1");
+    assert_eq!(body["actions"][1]["style"], "secondary", "style defaults like the Dart codec");
+    let fb = ec.fallback.unwrap();
+    assert!(fb.contains("[1] Status") && fb.contains("[2] Model"), "{fb}");
+}
+
+#[test]
+fn outgoing_actions_rejects_a_menu_without_buttons() {
+    for bad in [
+        json!({"id": "m", "actions": []}),
+        json!({"actions": [{"id": "a", "label": "A"}]}),
+        json!({"id": "m", "actions": [{"id": "a"}]}),
+    ] {
+        assert!(outgoing::encode(&json!({"conversationId": "ab12", "contentType": "actions", "actions": bad})).is_err());
+    }
+}
+
+#[tokio::test]
+async fn intent_decodes_to_the_pressed_button() {
+    match codec::decode(&codec::encode_intent("menu-1", "model")).await.unwrap() {
+        Content::Intent { id, action_id, metadata } => {
+            assert_eq!(id, "menu-1");
+            assert_eq!(action_id, "model");
+            assert!(metadata.is_none());
+        }
+        other => panic!("expected an intent, got {other:?}"),
+    }
+}
