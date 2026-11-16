@@ -239,6 +239,33 @@ async fn dm(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
     }
 }
 
+/// `POST /group` body `{inboxIds:[...], name?, description?}` -> `{conversationId, members}`.
+/// Opens a new group with those people (the daemon's own inbox is its creator and
+/// admin), so a bot can start a chat of its own. Each call makes a NEW group.
+async fn group(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    let ids: Vec<String> = body
+        .get("inboxIds")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str)
+            .map(|s| s.trim().trim_start_matches("0x").to_lowercase())
+            .filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "give inboxIds" })));
+    }
+    let text = |k: &str| body.get(k).and_then(Value::as_str).map(str::to_string);
+    match crate::api::groups::new_group(ids, text("name"), None, text("description")).await {
+        Ok(info) => (StatusCode::OK, Json(json!({
+            "conversationId": info.id,
+            "members": info.members.iter().map(|m| m.inbox_id.clone()).collect::<Vec<_>>(),
+        }))),
+        Err(e) => {
+            tracing::error!("group failed: {e:#}");
+            (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("{e:#}") })))
+        }
+    }
+}
+
 async fn init() -> Json<Value> {
     Json(json!({ "ok": true }))
 }
@@ -259,6 +286,7 @@ pub async fn serve(addr: String, address: String, inbox_id: String, fwd: Forward
     let app = Router::new()
         .route("/send", post(send))
         .route("/dm", post(dm))
+        .route("/group", post(group))
         .route("/api/init", post(init))
         .route("/health", get(health))
         // axum's default is 2 MB, too small for a base64 attachment of a few

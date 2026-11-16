@@ -106,6 +106,13 @@ XMTP_WATCH_CMD="sh /opt/checks/disk.sh" XMTP_WATCH_TO=<your inbox id> ./target/r
 {"address": "0x..."}
 ```
 
+**`POST /group`** opens a **new** group chat with the given people; the daemon's own inbox creates it and is its admin. Every call makes another group, so keep the id it returns. `400` with no `inboxIds`, `502` if XMTP refused.
+
+```json
+{"inboxIds": ["<inbox id>", "..."], "name": "optional", "description": "optional"}
+  ->  {"conversationId": "<id>", "members": ["<inbox id>", "..."]}
+```
+
 **`GET /health`** returns `{address, inboxId, queued, streamStartedMs, lastStreamEventMs}`. `queued` is how many messages wait for your webhook. Compare `lastStreamEventMs` with `streamStartedMs` to tell "alive" from "alive but no longer receiving".
 
 **`POST /api/init`** always answers `200`. Handy as an "is it up?" poll.
