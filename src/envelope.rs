@@ -34,6 +34,9 @@ pub struct FileOut {
 #[serde(rename_all = "camelCase")]
 pub struct Incoming {
     pub id: String,
+    /// The inbox that received the message: this daemon's own. A bot that
+    /// runs several daemons (one per inbox) tells them apart by it.
+    pub inbox_id: String,
     pub sender_inbox_id: String,
     /// ms since epoch
     pub timestamp: i64,
@@ -169,9 +172,11 @@ pub async fn build(
     m: &MessageInfo,
     content: &Content,
     convos: &mut Conversations,
+    my_inbox: &str,
 ) -> Option<Incoming> {
     let mut env = Incoming {
         id: m.id.clone(),
+        inbox_id: my_inbox.to_string(),
         sender_inbox_id: m.sender_inbox_id.clone(),
         timestamp: m.sent_at_ms,
         conversation_id: m.conversation_topic.clone(),

@@ -35,6 +35,8 @@ More logs: `RUST_LOG=xmtp_daemon=debug,warn`.
 
 Everything is an environment variable; the table is in README.md § Configuration. There is no config file in this repo by design: the bot behind the webhook owns behaviour.
 
+Several inboxes on one machine = several daemons, one folder and one port each (README § Several inboxes, `deploy/xmtp_daemon@.service`). Never point two at one folder. Every incoming envelope carries `inboxId` (the receiving inbox), so they can share one webhook.
+
 ## Rules for agents
 
 - Never print, log or send the contents of `XMTP_KEY_FILE` or `XMTP_DB_KEY_FILE`.

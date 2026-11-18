@@ -123,7 +123,7 @@ XMTP_WATCH_CMD="sh /opt/checks/disk.sh" XMTP_WATCH_TO=<your inbox id> ./target/r
 
 ```json
 {
-  "id": "...", "senderInboxId": "...", "timestamp": 1730000000000,
+  "id": "...", "inboxId": "...", "senderInboxId": "...", "timestamp": 1730000000000,
   "conversationId": "...", "role": "user",
   "content": "text, or base64 of the first file",
   "contentType": "text | attachment | readReceipt | intent",
@@ -137,12 +137,40 @@ XMTP_WATCH_CMD="sh /opt/checks/disk.sh" XMTP_WATCH_TO=<your inbox id> ./target/r
 - A button press arrives as `contentType: "intent"`, `content` = the button id, and `intent: {"id": "<menu id>", "actionId": "<button id>", "metadata": {...}}`.
 - File fields appear only for attachments. `attachments` lists every file of a gallery; the top-level file fields carry the first one.
 - For a DM, `members` is the other person only.
+- `inboxId` is the inbox that received the message: this daemon's own (the same as `/health`). A bot that runs [several inboxes](#several-inboxes-on-one-machine) tells them apart by it.
 - **`POST {XMTP_WEBHOOK_URL}/api/xmtp/group_members`** sends `{conversationId, members:[...]}` the first time a group is seen.
 
 Delivery rules:
 - One ordered queue, at most 1,000 waiting; beyond that the oldest is dropped (logged).
 - `2xx` = delivered. `4xx` = your bot refused it: dropped, not retried. Anything else = retried with backoff from 1 s to 30 s.
 - After each `2xx`, the message's timestamp is saved to `{XMTP_DB_DIR}/forwarded_cursor`. On restart, anything at or below it is skipped, so nothing is delivered twice. A first run starts at "now": it does not replay old history.
+
+## Several inboxes on one machine
+
+One daemon is one inbox. To run several (a few bots, each with its own name and picture in people's chat lists), run one daemon per inbox. They share the binary; each one gets its **own folder** (its key, database key and database) and its **own port**. They can all point at the same webhook: every message says which inbox received it (`inboxId`), and your bot answers through that inbox's `/send`.
+
+On Linux, `deploy/xmtp_daemon@.service` makes each one a service, named after its folder:
+
+```bash
+sudo useradd --system --home /opt/xmtp_daemon xmtp
+sudo mkdir -p /opt/xmtp_daemon/alice
+sudo cp target/release/xmtp_daemon /opt/xmtp_daemon/
+sudo cp deploy/xmtp_daemon@.service /etc/systemd/system/
+printf 'XMTP_HTTP_ADDR=127.0.0.1:3111
+XMTP_WEBHOOK_URL=http://127.0.0.1:4849
+' | sudo tee /opt/xmtp_daemon/alice/daemon.env
+sudo chown -R xmtp: /opt/xmtp_daemon
+sudo systemctl daemon-reload && sudo systemctl enable --now xmtp_daemon@alice
+
+curl -s 127.0.0.1:3111/health      # its inboxId and address: the new inbox
+```
+
+For the next inbox, repeat the last three lines with another name and port (`bob`, `3112`, ...). Keys are created on the first start; back up each folder's `secrets/`.
+
+- **To write first** (the inbox opens the chat): `POST /dm` on that inbox's port with the person's `inboxId`, then `/send` to the `conversationId` it returns.
+- Without systemd, start each one from its own folder (`cd /opt/xmtp_daemon/alice && env $(cat daemon.env) ../xmtp_daemon`) under any supervisor; a cron job that starts it when `/health` does not answer is enough.
+- Each inbox is one network connection and roughly the memory of one daemon; ten are fine on a small server.
+- [gpette](https://github.com/0xjmsl/gpette) speaks this out of the box: list the daemons under `[inboxes]` and bind each profile to one.
 
 ## Content types
 

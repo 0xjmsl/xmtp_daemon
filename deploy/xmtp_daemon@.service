@@ -1,0 +1,28 @@
+# One xmtp_daemon per inbox, as a systemd template (Linux).
+#
+#   sudo cp xmtp_daemon@.service /etc/systemd/system/
+#   sudo systemctl enable --now xmtp_daemon@<name>
+#
+# Each inbox lives in its own folder, /opt/xmtp_daemon/<name>/, which holds:
+#   daemon.env     its settings (at least XMTP_HTTP_ADDR, a port of its own)
+#   secrets/       its key and database key (created on the first start, mode 600)
+#   xmtp_data/     its database
+# The binary is shared: /opt/xmtp_daemon/xmtp_daemon. README § Several inboxes.
+
+[Unit]
+Description=xmtp_daemon (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=xmtp
+WorkingDirectory=/opt/xmtp_daemon/%i
+EnvironmentFile=/opt/xmtp_daemon/%i/daemon.env
+ExecStart=/opt/xmtp_daemon/xmtp_daemon
+# The daemon closes cleanly on Ctrl-C (SIGINT) only.
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -154,7 +154,7 @@ async fn handle(
     } else {
         None
     };
-    let Some(env) = envelope::build(m, &content, convos).await else { return };
+    let Some(env) = envelope::build(m, &content, convos, my_inbox).await else { return };
     // Log the exact envelope, with file bodies shortened to their size.
     let mut json = serde_json::to_value(&env).unwrap_or_default();
     shorten_b64(&mut json);
