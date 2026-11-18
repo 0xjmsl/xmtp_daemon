@@ -33,7 +33,19 @@ On Windows, the OpenSSL build step needs Perl: put Strawberry Perl first on `PAT
 XMTP_WEBHOOK_URL=http://127.0.0.1:5000 ./target/release/xmtp_daemon
 ```
 
-On the first run it creates the inbox key and the database key (on Linux and macOS as files only their owner can read, mode 600). **Keep both secret and backed up**: lose the key and you lose the inbox; lose the database key and you lose the message history.
+On Windows, with the downloadable build (PowerShell; keep the `.dll` files beside the `.exe`):
+
+```powershell
+cd C:\Tools\xmtp_daemon
+$env:XMTP_WEBHOOK_URL = "http://127.0.0.1:5000"
+.\xmtp_daemon.exe
+```
+
+In PowerShell, `set NAME=value` does not set an environment variable; use `$env:NAME = "value"` (in `cmd`, `set` is right). Without `XMTP_WEBHOOK_URL` the daemon runs in log-only mode: it receives messages and tells nobody.
+
+**Start it from its own folder, always.** The key, the database key and the database live in the folder it is started from. Started from another folder it creates a new key there: a new address and a new inbox, with no warning. `/health` shows the `inboxId`; check it is the one you expect.
+
+On the first run it creates the inbox key and the database key (on Linux and macOS as files only their owner can read, mode 600; on Windows they are ordinary files with the folder's permissions, so keep the folder private). **Keep both secret and backed up**: lose the key and you lose the inbox; lose the database key and you lose the message history.
 
 ## Configuration (environment variables)
 
@@ -99,7 +111,7 @@ XMTP_WATCH_CMD="sh /opt/checks/disk.sh" XMTP_WATCH_TO=<your inbox id> ./target/r
 
 `actions` is a menu of buttons (`coinbase.com/actions` 1.0). Apps that know it show buttons and answer with an intent (below); every other app shows the fallback the daemon writes, a numbered list ending "Reply with the number to select". `style` is `primary`, `secondary` (the default) or `danger`.
 
-**`POST /dm`** finds the DM with someone, or opens it, so your bot can write first (a receipt, a hello). Give `inboxId` or an Ethereum `address`. Returns the `conversationId` that `/send` takes and incoming messages carry; the same person always gets the same id. `400` with neither, `404` if the address has no XMTP inbox, `502` if XMTP refused.
+**`POST /dm`** finds the DM with someone, or opens it, so your bot can write first (a receipt, a hello). Give `inboxId` or an Ethereum `address`. Returns the `conversationId` that `/send` takes and incoming messages carry; the same person normally gets the same id (if they opened a chat with you from their side too, XMTP settles on one of the two, so read the id again before you rely on a stored one). `400` with neither, `404` if the address has no XMTP inbox, `502` if XMTP refused, which is also what an `inboxId` that does not exist gives.
 
 ```json
 {"inboxId": "<their inbox id>"}      ->  {"conversationId": "<id>", "peerInboxId": "<their inbox id>"}
@@ -170,7 +182,8 @@ For the next inbox, repeat the last three lines with another name and port (`bob
 - **To write first** (the inbox opens the chat): `POST /dm` on that inbox's port with the person's `inboxId`, then `/send` to the `conversationId` it returns.
 - Without systemd, start each one from its own folder (`cd /opt/xmtp_daemon/alice && env $(cat daemon.env) ../xmtp_daemon`) under any supervisor; a cron job that starts it when `/health` does not answer is enough.
 - Each inbox is one network connection and roughly the memory of one daemon; ten are fine on a small server.
-- [gpette](https://github.com/0xjmsl/gpette) speaks this out of the box: list the daemons under `[inboxes]` and bind each profile to one.
+- On Windows there is no service template: start each one from its own folder with its own `XMTP_HTTP_ADDR` (a task launcher such as [marcha](https://github.com/0xjmsl/marcha) with one task per inbox works well).
+- [gpette](https://github.com/0xjmsl/gpette) speaks this out of the box: list the daemons under `[inboxes]` and bind each profile to one. Its `SETUPS.md` (setups 4 and 6) covers a whole team: one inbox per bot, one folder each, turns on a timer, reports to you.
 
 ## Content types
 
