@@ -109,6 +109,14 @@ XMTP_WATCH_CMD="sh /opt/checks/disk.sh" XMTP_WATCH_TO=<your inbox id> ./target/r
                          {"id": "model", "label": "Model"}]}}
 ```
 
+```json
+{"conversationId": "<id>", "contentType": "a2ui",
+ "a2ui": {"messages": [{"version": "1.0", "createSurface": {"surfaceId": "menu", "components": [...]}}]},
+ "fallback": "A menu"}
+```
+
+`a2ui` is an interface the receiving app draws (`publicos.dev/a2ui` 1.0): `messages` holds [A2UI](https://a2ui.org) messages, in order, sent as they are. The daemon checks only the shape (at least one message, each an object); the bot checks what it sends and the app checks what it draws. Apps that do not know the type show `fallback`, or a fixed line when none is given.
+
 `actions` is a menu of buttons (`coinbase.com/actions` 1.0). Apps that know it show buttons and answer with an intent (below); every other app shows the fallback the daemon writes, a numbered list ending "Reply with the number to select". `style` is `primary`, `secondary` (the default) or `danger`.
 
 **`POST /dm`** finds the DM with someone, or opens it, so your bot can write first (a receipt, a hello). Give `inboxId` or an Ethereum `address`. Returns the `conversationId` that `/send` takes and incoming messages carry; the same person normally gets the same id (if they opened a chat with you from their side too, XMTP settles on one of the two, so read the id again before you rely on a stored one). `400` with neither, `404` if the address has no XMTP inbox, `502` if XMTP refused, which is also what an `inboxId` that does not exist gives.
@@ -138,7 +146,7 @@ XMTP_WATCH_CMD="sh /opt/checks/disk.sh" XMTP_WATCH_TO=<your inbox id> ./target/r
   "id": "...", "inboxId": "...", "senderInboxId": "...", "timestamp": 1730000000000,
   "conversationId": "...", "role": "user",
   "content": "text, or base64 of the first file",
-  "contentType": "text | attachment | readReceipt | intent",
+  "contentType": "text | attachment | readReceipt | intent | a2ui",
   "kind": "dm | group",
   "members": [{"inboxId": "...", "permissionLevel": "member", "identifiers": [...]}],
   "filename": "...", "mimeType": "...", "description": "caption",
@@ -146,6 +154,7 @@ XMTP_WATCH_CMD="sh /opt/checks/disk.sh" XMTP_WATCH_TO=<your inbox id> ./target/r
 }
 ```
 
+- What a person does on an A2UI interface arrives as `contentType: "a2ui"`, `content` empty, and `a2ui: {"messages": [...]}`: a button press is an `action` message with the event's name and values.
 - A button press arrives as `contentType: "intent"`, `content` = the button id, and `intent: {"id": "<menu id>", "actionId": "<button id>", "metadata": {...}}`.
 - File fields appear only for attachments. `attachments` lists every file of a gallery; the top-level file fields carry the first one.
 - For a DM, `members` is the other person only.
@@ -196,6 +205,7 @@ For the next inbox, repeat the last three lines with another name and port (`bob
 | Gallery (several uploaded files) | yes | no |
 | Menu of buttons (`coinbase.com/actions`) | no | yes, with a numbered fallback |
 | Button press (`coinbase.com/intent`) | yes | no |
+| A2UI interface and its actions (`publicos.dev/a2ui`) | yes | yes, with a fallback line |
 | Replies, reactions, other types | logged, not forwarded | no |
 
 ## Things to know

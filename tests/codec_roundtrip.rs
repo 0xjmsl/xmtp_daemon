@@ -102,6 +102,44 @@ fn outgoing_rejects_bad_input() {
     .is_err());
 }
 
+fn surface() -> serde_json::Value {
+    json!({"messages": [{"version": "1.0", "createSurface": {"surfaceId": "menu", "components": [
+        {"id": "root", "component": "Text", "text": "hi"}
+    ]}}]})
+}
+
+#[tokio::test]
+async fn outgoing_a2ui_round_trips_with_a_fallback() {
+    use prost::Message as _;
+    let (topic, bytes, push) = outgoing::encode(
+        &json!({"conversationId": "ab12", "contentType": "a2ui", "a2ui": surface(), "fallback": "A menu"}),
+    )
+    .unwrap();
+    assert_eq!((topic.as_str(), push), ("ab12", true));
+    assert_eq!(codec::type_of(&bytes).as_deref(), Some("publicos.dev/a2ui"));
+    let ec = xmtp_proto::xmtp::message_contents::EncodedContent::decode(bytes.as_slice()).unwrap();
+    assert_eq!(ec.fallback.as_deref(), Some("A menu"));
+    match codec::decode(&bytes).await.unwrap() {
+        Content::A2ui(v) => assert_eq!(v, surface()),
+        other => panic!("expected a2ui, got {other:?}"),
+    }
+    // No fallback given: the fixed line, never an empty one.
+    let (_, bytes, _) = outgoing::encode(
+        &json!({"conversationId": "ab12", "contentType": "a2ui", "a2ui": surface()}),
+    )
+    .unwrap();
+    let ec = xmtp_proto::xmtp::message_contents::EncodedContent::decode(bytes.as_slice()).unwrap();
+    assert!(ec.fallback.unwrap().contains("interactive message"));
+}
+
+#[test]
+fn outgoing_a2ui_rejects_a_payload_without_messages() {
+    for bad in [json!({}), json!({"messages": []}), json!({"messages": ["x"]}), json!([1])] {
+        assert!(outgoing::encode(&json!({"conversationId": "ab12", "contentType": "a2ui", "a2ui": bad})).is_err());
+    }
+    assert!(outgoing::encode(&json!({"conversationId": "ab12", "contentType": "a2ui"})).is_err());
+}
+
 fn menu() -> serde_json::Value {
     json!({"id": "menu-1", "description": "Pick one", "actions": [
         {"id": "status", "label": "Status", "style": "primary"},

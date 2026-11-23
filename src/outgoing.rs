@@ -7,6 +7,8 @@
 //! - read receipt `{conversationId, contentType: "readReceipt", content: ""}`
 //! - menu:        `{conversationId, contentType: "actions",
 //!                  actions: {id, description, actions: [{id, label, style?}]}}`
+//! - interface:   `{conversationId, contentType: "a2ui",
+//!                  a2ui: {messages: [<A2UI message>, ...]}, fallback?}`
 //!
 //! `description` on an attachment is sent as the file's caption.
 
@@ -61,6 +63,14 @@ pub fn encode(msg: &Value) -> Result<(String, Vec<u8>, bool)> {
                 .get("actions")
                 .ok_or_else(|| anyhow!("actions message without `actions`"))?;
             Ok((topic, codec::encode_actions(menu)?, true))
+        }
+        // An interface the app draws: `a2ui` is `{messages: [...]}`.
+        "a2ui" => {
+            let payload = msg
+                .get("a2ui")
+                .ok_or_else(|| anyhow!("a2ui message without `a2ui`"))?;
+            let fallback = msg.get("fallback").and_then(Value::as_str);
+            Ok((topic, codec::encode_a2ui(payload, fallback)?, true))
         }
         "attachment" => {
             let file = FileItem {

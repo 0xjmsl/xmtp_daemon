@@ -61,6 +61,10 @@ pub struct Incoming {
     /// `content` carries the actionId too.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent: Option<serde_json::Value>,
+    /// An A2UI payload from the person's app: `{messages: [...]}` (a button
+    /// press on a surface is an `action` message). `content` is empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a2ui: Option<serde_json::Value>,
 }
 
 fn b64(data: &[u8]) -> String {
@@ -190,6 +194,7 @@ pub async fn build(
         description: None,
         attachments: None,
         intent: None,
+        a2ui: None,
     };
 
     match content {
@@ -218,6 +223,10 @@ pub async fn build(
                 v["metadata"] = m.clone();
             }
             env.intent = Some(v);
+        }
+        Content::A2ui(payload) => {
+            env.content_type = "a2ui";
+            env.a2ui = Some(payload.clone());
         }
         Content::Unsupported { type_id, .. } => {
             tracing::info!(id = %m.id, %type_id, "unsupported type, not forwarded");

@@ -41,6 +41,11 @@ pub enum Content {
         action_id: String,
         metadata: Option<serde_json::Value>,
     },
+    /// An A2UI payload (`publicos.dev/a2ui`): `{messages: [...]}`, the A2UI
+    /// messages as they are, plus any transport metadata keys beside them.
+    /// From a person's app these are `action` messages (a button press on a
+    /// surface the bot sent) and renderer `error`s.
+    A2ui(serde_json::Value),
     /// Anything we don't handle yet (reply, reaction, …): type + fallback.
     Unsupported {
         type_id: String,
@@ -184,6 +189,44 @@ pub fn encode_actions(menu: &serde_json::Value) -> Result<Vec<u8>> {
     ))
 }
 
+/// The authority and type of the A2UI content type.
+pub const A2UI_AUTHORITY: &str = "publicos.dev";
+pub const A2UI_TYPE: &str = "a2ui";
+const A2UI_FALLBACK: &str = "[An interactive message. This app cannot show it.]";
+
+/// The A2UI payload is `{messages: [<A2UI message>, ...]}`: at least one
+/// message, each a JSON object. What a message says is not checked here; the
+/// bot checks what it sends, and the app checks what it draws.
+fn a2ui_payload(v: &serde_json::Value) -> Result<()> {
+    let messages = v
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .filter(|m| !m.is_empty())
+        .ok_or_else(|| anyhow!("a2ui without messages"))?;
+    if messages.iter().any(|m| !m.is_object()) {
+        return Err(anyhow!("an a2ui message is not an object"));
+    }
+    Ok(())
+}
+
+/// An interface drawn by the receiving app (`publicos.dev/a2ui` 1.0, JSON):
+/// `{messages: [...]}`, A2UI messages (https://a2ui.org) in order. Apps that
+/// do not know the type show `fallback`, or a fixed line when none is given.
+pub fn encode_a2ui(payload: &serde_json::Value, fallback: Option<&str>) -> Result<Vec<u8>> {
+    a2ui_payload(payload)?;
+    let fallback = fallback
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .unwrap_or(A2UI_FALLBACK);
+    Ok(encoded_as(
+        A2UI_AUTHORITY,
+        A2UI_TYPE,
+        serde_json::to_vec(payload)?,
+        HashMap::new(),
+        Some(fallback.to_string()),
+    ))
+}
+
 /// A button press (`coinbase.com/intent` 1.0). Bots don't send these; it is
 /// here for tests and for a bot that drives another bot.
 pub fn encode_intent(id: &str, action_id: &str) -> Vec<u8> {
@@ -231,6 +274,13 @@ pub async fn decode(bytes: &[u8]) -> Result<Content> {
             action_id: field("actionId")?,
             metadata: v.get("metadata").filter(|m| m.is_object()).cloned(),
         });
+    }
+
+    if authority == A2UI_AUTHORITY && type_id == A2UI_TYPE {
+        let v: serde_json::Value =
+            serde_json::from_slice(&ec.content).context("a2ui is not JSON")?;
+        a2ui_payload(&v)?;
+        return Ok(Content::A2ui(v));
     }
 
     match type_id.as_str() {
