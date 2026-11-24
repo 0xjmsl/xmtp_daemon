@@ -19,6 +19,10 @@ A standalone XMTP client in Rust. It keeps one XMTP inbox online and lets any pr
 - Your bot replies by POSTing to the daemon's `/send`.
 - Files arrive already downloaded and decrypted; your bot only sees plain files.
 
+## Download
+
+Windows builds are on the [releases page](https://github.com/0xjmsl/xmtp_daemon/releases): `xmtp_daemon-windows-x64-<version>.zip`. Unzip it into its own permanent folder and keep the `.dll` files beside the `.exe`. Start it from that folder every time: the key and the database live where it is started (see Run). No Rust needed.
+
 ## Build
 
 ```bash
