@@ -185,3 +185,64 @@ async fn intent_decodes_to_the_pressed_button() {
         other => panic!("expected an intent, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn reaction_roundtrip() {
+    let bytes = codec::encode_reaction("msg123", "🫡", "added").unwrap();
+    assert_eq!(codec::type_of(&bytes).as_deref(), Some("xmtp.org/reaction"));
+    match codec::decode(&bytes).await.unwrap() {
+        Content::Reaction { reference, action, emoji, schema } => {
+            assert_eq!((reference.as_str(), action.as_str(), emoji.as_str(), schema.as_str()),
+                       ("msg123", "added", "🫡", "unicode"));
+        }
+        other => panic!("expected Reaction, got {other:?}"),
+    }
+}
+
+#[test]
+fn reaction_needs_reference_and_emoji() {
+    assert!(codec::encode_reaction("", "👍", "added").is_err());
+    assert!(codec::encode_reaction("m", " ", "added").is_err());
+    assert!(codec::encode_reaction("m", "👍", "liked").is_err());
+}
+
+#[tokio::test]
+async fn reply_roundtrip_is_text_inside() {
+    let bytes = codec::encode_reply_text("msg9", "on it").unwrap();
+    match codec::decode(&bytes).await.unwrap() {
+        Content::Reply { reference, inner } => {
+            assert_eq!(reference, "msg9");
+            assert!(matches!(*inner, Content::Text(ref t) if t == "on it"));
+        }
+        other => panic!("expected Reply, got {other:?}"),
+    }
+}
+
+/// The JSON shape the PublicOS apps' ReactionV2Codec writes.
+#[tokio::test]
+async fn reaction_from_the_app_shape() {
+    use prost::Message as _;
+    use xmtp_proto::xmtp::message_contents::{ContentTypeId, EncodedContent};
+    let body = json!({"reference": "abc", "action": "removed", "content": "👍", "schema": "unicode"});
+    let ec = EncodedContent {
+        r#type: Some(ContentTypeId { authority_id: "xmtp.org".into(), type_id: "reaction".into(), version_major: 1, version_minor: 0 }),
+        parameters: Default::default(),
+        fallback: None,
+        compression: None,
+        content: serde_json::to_vec(&body).unwrap(),
+    };
+    match codec::decode(&ec.encode_to_vec()).await.unwrap() {
+        Content::Reaction { reference, action, .. } => assert_eq!((reference.as_str(), action.as_str()), ("abc", "removed")),
+        other => panic!("expected Reaction, got {other:?}"),
+    }
+}
+
+#[test]
+fn outgoing_reaction_and_reply_shapes() {
+    let (_, b, push) = outgoing::encode(&json!({"conversationId": "c", "contentType": "reaction", "reference": "m1", "content": "🥲"})).unwrap();
+    assert!(push);
+    assert_eq!(codec::type_of(&b).as_deref(), Some("xmtp.org/reaction"));
+    let (_, b, _) = outgoing::encode(&json!({"conversationId": "c", "contentType": "reply", "reference": "m1", "content": "yes"})).unwrap();
+    assert_eq!(codec::type_of(&b).as_deref(), Some("xmtp.org/reply"));
+    assert!(outgoing::encode(&json!({"conversationId": "c", "contentType": "reply", "content": "yes"})).is_err());
+}

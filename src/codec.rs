@@ -46,7 +46,21 @@ pub enum Content {
     /// From a person's app these are `action` messages (a button press on a
     /// surface the bot sent) and renderer `error`s.
     A2ui(serde_json::Value),
-    /// Anything we don't handle yet (reply, reaction, …): type + fallback.
+    /// A reaction (`xmtp.org/reaction` 1.0, JSON): `reference` is the id of the
+    /// message reacted to, `action` "added" or "removed", `emoji` the content.
+    Reaction {
+        reference: String,
+        action: String,
+        emoji: String,
+        schema: String,
+    },
+    /// A reply (`xmtp.org/reply` 1.0): `reference` is the id of the message
+    /// replied to; `inner` is the reply itself, decoded like any message.
+    Reply {
+        reference: String,
+        inner: Box<Content>,
+    },
+    /// Anything we don't handle yet: type + fallback.
     Unsupported {
         type_id: String,
         fallback: Option<String>,
@@ -133,6 +147,49 @@ pub fn encode_attachment(file: &FileItem, description: Option<&str>) -> Vec<u8> 
         None => format!("[Attachment: {}]", file.filename),
     };
     encoded("attachment", file.data.clone(), p, Some(fallback))
+}
+
+/// A reaction to message `reference` (`xmtp.org/reaction` 1.0, JSON
+/// `{reference, action, content, schema}`), the shape the PublicOS apps read.
+/// `action` is "added" or "removed".
+pub fn encode_reaction(reference: &str, emoji: &str, action: &str) -> Result<Vec<u8>> {
+    if reference.trim().is_empty() {
+        return Err(anyhow!("reaction without reference"));
+    }
+    if emoji.trim().is_empty() {
+        return Err(anyhow!("reaction without emoji"));
+    }
+    if action != "added" && action != "removed" {
+        return Err(anyhow!("reaction action must be added or removed"));
+    }
+    let body = serde_json::json!({
+        "reference": reference.trim(),
+        "action": action,
+        "content": emoji.trim(),
+        "schema": "unicode",
+    });
+    let verb = if action == "added" { "Reacted" } else { "Removed" };
+    Ok(encoded(
+        "reaction",
+        serde_json::to_vec(&body)?,
+        HashMap::new(),
+        Some(format!("{verb} {} to an earlier message", emoji.trim())),
+    ))
+}
+
+/// A text reply to message `reference` (`xmtp.org/reply` 1.0): the content is
+/// the reply's own EncodedContent (a text message), as protobuf bytes.
+pub fn encode_reply_text(reference: &str, text: &str) -> Result<Vec<u8>> {
+    if reference.trim().is_empty() {
+        return Err(anyhow!("reply without reference"));
+    }
+    if text.is_empty() {
+        return Err(anyhow!("reply without content"));
+    }
+    let mut p = HashMap::new();
+    p.insert("reference".into(), reference.trim().to_string());
+    p.insert("contentType".into(), "xmtp.org/text".into());
+    Ok(encoded("reply", encode_text(text), p, Some(format!("Replied: {text}"))))
 }
 
 pub fn encode_read_receipt() -> Vec<u8> {
@@ -248,6 +305,23 @@ pub fn type_of(bytes: &[u8]) -> Option<String> {
 
 pub async fn decode(bytes: &[u8]) -> Result<Content> {
     let ec = EncodedContent::decode(bytes).context("not an EncodedContent")?;
+    if ec.r#type.as_ref().map(|t| (t.authority_id.as_str(), t.type_id.as_str()))
+        == Some(("xmtp.org", "reply"))
+    {
+        let reference = ec
+            .parameters
+            .get("reference")
+            .filter(|r| !r.is_empty())
+            .cloned()
+            .ok_or_else(|| anyhow!("reply without reference"))?;
+        // The reply's content is a whole EncodedContent; a reply inside a
+        // reply is not followed.
+        if type_of(&ec.content).as_deref() == Some("xmtp.org/reply") {
+            return Err(anyhow!("nested reply"));
+        }
+        let inner = Box::pin(decode(&ec.content)).await?;
+        return Ok(Content::Reply { reference, inner: Box::new(inner) });
+    }
     let type_id = ec
         .r#type
         .as_ref()
@@ -287,6 +361,22 @@ pub async fn decode(bytes: &[u8]) -> Result<Content> {
         "text" => Ok(Content::Text(String::from_utf8_lossy(&ec.content).into_owned())),
 
         "readReceipt" => Ok(Content::ReadReceipt),
+
+        "reaction" if authority == "xmtp.org" => {
+            let v: serde_json::Value =
+                serde_json::from_slice(&ec.content).context("reaction is not JSON")?;
+            let s = |k: &str| v.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+            let reference = s("reference");
+            if reference.is_empty() {
+                return Err(anyhow!("reaction without reference"));
+            }
+            Ok(Content::Reaction {
+                reference,
+                action: if s("action").is_empty() { "added".into() } else { s("action") },
+                emoji: s("content"),
+                schema: s("schema"),
+            })
+        }
 
         // Inline: the file bytes ARE the content.
         "attachment" => Ok(Content::Files {

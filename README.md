@@ -210,7 +210,11 @@ For the next inbox, repeat the last three lines with another name and port (`bob
 | Menu of buttons (`coinbase.com/actions`) | no | yes, with a numbered fallback |
 | Button press (`coinbase.com/intent`) | yes | no |
 | A2UI interface and its actions (`publicos.dev/a2ui`) | yes | yes, with a fallback line |
-| Replies, reactions, other types | logged, not forwarded | no |
+| Reaction (`xmtp.org/reaction`) | yes: `contentType: "reaction"`, `content` = the emoji, `reaction: {reference, action, schema}` | yes: `{contentType: "reaction", reference, content, action?}` |
+| Reply (`xmtp.org/reply`) | yes: the inner message as usual, plus `replyTo` = the id it answers | text replies: `{contentType: "reply", reference, content}` |
+| Other types | logged, not forwarded | no |
+
+`reference` is a message id: the `id` of an incoming envelope, or the `id` `/send` returned.
 
 ## Things to know
 

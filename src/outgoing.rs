@@ -9,6 +9,11 @@
 //!                  actions: {id, description, actions: [{id, label, style?}]}}`
 //! - interface:   `{conversationId, contentType: "a2ui",
 //!                  a2ui: {messages: [<A2UI message>, ...]}, fallback?}`
+//! - reaction:    `{conversationId, contentType: "reaction", reference, content: "👍",
+//!                  action?: "added" | "removed"}`
+//! - reply:       `{conversationId, contentType: "reply", reference, content: "..."}`
+//!
+//! `reference` is the id of the earlier message (the `id` of an incoming envelope).
 //!
 //! `description` on an attachment is sent as the file's caption.
 
@@ -71,6 +76,17 @@ pub fn encode(msg: &Value) -> Result<(String, Vec<u8>, bool)> {
                 .ok_or_else(|| anyhow!("a2ui message without `a2ui`"))?;
             let fallback = msg.get("fallback").and_then(Value::as_str);
             Ok((topic, codec::encode_a2ui(payload, fallback)?, true))
+        }
+        // A reaction to an earlier message: `{reference, content: emoji, action?}`.
+        "reaction" => {
+            let s = |k: &str| msg.get(k).and_then(Value::as_str).unwrap_or("");
+            let action = if s("action").is_empty() { "added" } else { s("action") };
+            Ok((topic, codec::encode_reaction(s("reference"), s("content"), action)?, true))
+        }
+        // A text reply to an earlier message: `{reference, content}`.
+        "reply" => {
+            let s = |k: &str| msg.get(k).and_then(Value::as_str).unwrap_or("");
+            Ok((topic, codec::encode_reply_text(s("reference"), s("content"))?, true))
         }
         "attachment" => {
             let file = FileItem {

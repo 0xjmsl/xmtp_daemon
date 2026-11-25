@@ -65,6 +65,14 @@ pub struct Incoming {
     /// press on a surface is an `action` message). `content` is empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub a2ui: Option<serde_json::Value>,
+    /// A reaction: `{reference, action, schema}`; `reference` is the id of the
+    /// message reacted to, `content` carries the emoji.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reaction: Option<serde_json::Value>,
+    /// On a reply: the id of the message replied to. The rest of the envelope
+    /// is the reply itself (text, or a file).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
 }
 
 fn b64(data: &[u8]) -> String {
@@ -195,9 +203,33 @@ pub async fn build(
         attachments: None,
         intent: None,
         a2ui: None,
+        reaction: None,
+        reply_to: None,
+    };
+
+    // A reply is its inner message plus the id it answers.
+    let content = match content {
+        Content::Reply { reference, inner } => {
+            env.reply_to = Some(reference.clone());
+            inner.as_ref()
+        }
+        c => c,
     };
 
     match content {
+        Content::Reaction { reference, action, emoji, schema } => {
+            env.content_type = "reaction";
+            env.content = emoji.clone();
+            env.reaction = Some(serde_json::json!({
+                "reference": reference,
+                "action": action,
+                "schema": schema,
+            }));
+        }
+        Content::Reply { .. } => {
+            tracing::info!(id = %m.id, "reply inside a reply, not forwarded");
+            return None;
+        }
         // Read receipts go out early, without kind/members.
         Content::ReadReceipt => {
             env.content_type = "readReceipt";
