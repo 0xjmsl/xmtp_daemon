@@ -1,6 +1,6 @@
 [package]
 name = "xmtp_daemon"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A standalone XMTP client in Rust: keeps one inbox online and lets any program send and receive messages, files and galleries over local HTTP. Built on libxmtp. Not affiliated with XMTP."
 license = "MIT"
